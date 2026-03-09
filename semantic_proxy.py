@@ -13,8 +13,19 @@ import numpy as np
 import re
 import requests
 
+MODEL_PATH = "./models/bge-m3"
+
 model = None
 action_embeddings = None
+
+def _get_model():
+    if os.path.exists(MODEL_PATH):
+        print(f"Loading model from local: {MODEL_PATH}")
+        return BGEM3FlagModel(MODEL_PATH, use_fp16=True)
+    else:
+        print(f"Downloading model to {MODEL_PATH}...")
+        os.makedirs(MODEL_PATH, exist_ok=True)
+        return BGEM3FlagModel('BAAI/bge-m3', use_fp16=True, cache_dir=MODEL_PATH)
 
 def init_model(silence):
     global model, action_embeddings
@@ -23,7 +34,7 @@ def init_model(silence):
         import warnings
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            model = BGEM3FlagModel('BAAI/bge-m3', use_fp16=True)
+            model = _get_model()
             action_embeddings = model.encode(list(ACTIONS.values()))['dense_vecs']
 
 def extract_location(text):
