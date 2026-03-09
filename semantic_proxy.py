@@ -1,9 +1,30 @@
+import os
+import sys
+import io
+import warnings
+from contextlib import redirect_stdout, redirect_stderr
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
+os.environ['TRANSFORMERS_NO_ADVISORY_WARNINGS'] = '1'
+
 from FlagEmbedding import BGEM3FlagModel
+import argparse
 import numpy as np
 import re
 import requests
 
-model = BGEM3FlagModel('BAAI/bge-m3', use_fp16=True)
+model = None
+action_embeddings = None
+
+def init_model(silence):
+    global model, action_embeddings
+    devnull = io.StringIO()
+    with redirect_stdout(devnull), redirect_stderr(devnull):
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            model = BGEM3FlagModel('BAAI/bge-m3', use_fp16=True)
+            action_embeddings = model.encode(list(ACTIONS.values()))['dense_vecs']
 
 def extract_location(text):
     patterns = [
@@ -61,12 +82,14 @@ ACTIONS = {
 }
 
 action_names = list(ACTIONS.keys())
-action_descriptions = list(ACTIONS.values())
 
-# Pre-compute the semantic "fingerprints" of your actions
-action_embeddings = model.encode(action_descriptions)['dense_vecs']
-
-import argparse
+def silent_encode(texts):
+    devnull = io.StringIO()
+    with redirect_stdout(devnull), redirect_stderr(devnull):
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            return model.encode(texts)['dense_vecs']
 
 def log(msg):
     if not args.silence:
@@ -84,7 +107,7 @@ def execute_action(action_name, details):
 
 def agent_logic(user_input):
     log(f"Agent is analyzing: '{user_input}'")
-    query_emb = model.encode([user_input])['dense_vecs']
+    query_emb = silent_encode([user_input])
     
     scores = query_emb @ action_embeddings.T
     best_match_idx = np.argmax(scores)
@@ -103,6 +126,8 @@ def main():
     parser.add_argument('-q', '--question', type=str, help='Question to ask (non-interactive mode)')
     parser.add_argument('--silence', action='store_true', help='Clean output without debug logs')
     args = parser.parse_args()
+    
+    init_model(args.silence)
     
     if args.question:
         agent_logic(args.question)
