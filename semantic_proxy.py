@@ -66,47 +66,60 @@ action_descriptions = list(ACTIONS.values())
 # Pre-compute the semantic "fingerprints" of your actions
 action_embeddings = model.encode(action_descriptions)['dense_vecs']
 
+import argparse
+
+def log(msg):
+    if not args.silence:
+        print(msg)
+
 def execute_action(action_name, details):
-    print(f"--- [EXECUTING ACTION: {action_name}] with context: '{details}' ---")
+    log(f"--- [EXECUTING ACTION: {action_name}] with context: '{details}' ---")
     if action_name == "get_weather":
         location = extract_location(details)
         if location:
             result = get_weather(location)
-            print(f"Result: {result}")
+            print(result if args.silence else f"Result: {result}")
         else:
-            print("Result: Could not extract location from input")
+            print("Could not extract location from input" if args.silence else "Result: Could not extract location from input")
 
 def agent_logic(user_input):
-    # Step 1: Breakdown/Embed the input
-    print(f"Agent is analyzing: '{user_input}'")
+    log(f"Agent is analyzing: '{user_input}'")
     query_emb = model.encode([user_input])['dense_vecs']
     
-    # Step 2: Semantic Matching (Cosine Similarity)
-    # We find which action description is closest to the user's request
     scores = query_emb @ action_embeddings.T
     best_match_idx = np.argmax(scores)
     confidence = scores[0][best_match_idx]
     
     chosen_action = action_names[best_match_idx]
     
-    # Step 3: Threshold check (Don't execute if it's a weak match)
     if confidence > 0.45: 
         execute_action(chosen_action, user_input)
     else:
-        print("Agent Logic: No clear action found. Responding with general chat.")
+        log("Agent Logic: No clear action found. Responding with general chat.")
 
-# --- Interactive CLI ---
-if __name__ == "__main__":
-    print("=== Semantic Agent CLI ===")
-    print("Available actions: send_email, get_weather, query_database, shutdown_system")
-    print("Type 'exit' to quit\n")
+def main():
+    global args
+    parser = argparse.ArgumentParser(description="Semantic Proxy CLI")
+    parser.add_argument('-q', '--question', type=str, help='Question to ask (non-interactive mode)')
+    parser.add_argument('--silence', action='store_true', help='Clean output without debug logs')
+    args = parser.parse_args()
     
-    while True:
-        user_input = input("You: ").strip()
-        if user_input.lower() in ('exit', 'quit'):
-            print("Goodbye!")
-            break
-        if not user_input:
-            continue
-        agent_logic(user_input)
-        print()
+    if args.question:
+        agent_logic(args.question)
+    else:
+        print("=== Semantic Agent CLI ===")
+        print("Available actions: send_email, get_weather, query_database, shutdown_system")
+        print("Type 'exit' to quit\n")
+        
+        while True:
+            user_input = input("You: ").strip()
+            if user_input.lower() in ('exit', 'quit'):
+                print("Goodbye!")
+                break
+            if not user_input:
+                continue
+            agent_logic(user_input)
+            print()
+
+if __name__ == "__main__":
+    main()
