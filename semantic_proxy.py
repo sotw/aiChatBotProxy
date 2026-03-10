@@ -165,12 +165,26 @@ ACTIONS = {
     "send_email": "Compose and send an electronic mail to a recipient.",
     "get_weather": "Fetch the current temperature and atmospheric conditions for a city.",
     "query_database": "Search the internal SQL database for customer records.",
-    "shutdown_system": "Safely terminate all running processes and power off."
+    "shutdown_system": "Safely terminate all running processes and power off.",
+    "general_chat": "Handle general conversation, greetings, and non-action queries."
 }
 
 action_names = list(ACTIONS.keys())
 
 class RequestHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == '/actions':
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                "actions": ACTIONS,
+                "model": "BAAI/bge-m3"
+            }).encode())
+        else:
+            self.send_response(404)
+            self.end_headers()
+    
     def do_POST(self):
         if self.path == '/predict':
             content_length = int(self.headers['Content-Length'])
@@ -208,6 +222,10 @@ def log(msg):
 
 def execute_action(action_name, original_text, translated_text):
     log(f"--- [EXECUTING ACTION: {action_name}] with context: '{original_text}' ---")
+    if action_name == "general_chat":
+        msg = "I'm here to help with specific actions like weather, email, database queries, etc. How can I assist you?"
+        print(msg if args.silence else f"Result: {msg}")
+        return
     if action_name == "get_weather":
         location = extract_location(original_text) or extract_location(translated_text)
         if location:
@@ -221,9 +239,37 @@ def execute_action(action_name, original_text, translated_text):
 
 def agent_logic(user_input, return_result=False, execute_action_flag=True):
     src_lang = detect_language(user_input)
-    en_text, original_lang = translate_to_english(user_input, src_lang)
     
-    log(f"Agent is analyzing: '{user_input}' (detected: {src_lang} -> en: {en_text})")
+    query_emb_direct = silent_encode([user_input])
+    scores_direct = query_emb_direct @ action_embeddings.T
+    best_match_idx_direct = np.argmax(scores_direct)
+    confidence_direct = scores_direct[0][best_match_idx_direct]
+    
+    log(f"Agent analyzing (direct): '{user_input}' (detected: {src_lang}, conf: {confidence_direct:.3f})")
+    
+    if confidence_direct > 0.35:
+        chosen_action = action_names[best_match_idx_direct]
+        
+        if chosen_action == "get_weather" and not (extract_location(user_input) or extract_location(user_input)):
+            chosen_action = "general_chat"
+        
+        result = None
+        if execute_action_flag:
+            result = execute_action_and_get_result(chosen_action, user_input, user_input)
+            if result and src_lang != 'en':
+                if src_lang == 'zh-CN':
+                    result = translate_from_english(result, 'zh-TW')
+                else:
+                    result = translate_from_english(result, src_lang)
+        
+        if return_result:
+            return {"action": chosen_action, "confidence": float(confidence_direct), "result": result, "detected_lang": src_lang, "mode": "direct"}
+        
+        execute_action(chosen_action, user_input, user_input)
+        return
+    
+    en_text, _ = translate_to_english(user_input, src_lang)
+    log(f"Agent fallback to translated: '{user_input}' -> '{en_text}'")
     query_emb = silent_encode([en_text])
     
     scores = query_emb @ action_embeddings.T
@@ -231,6 +277,9 @@ def agent_logic(user_input, return_result=False, execute_action_flag=True):
     confidence = scores[0][best_match_idx]
     
     chosen_action = action_names[best_match_idx]
+    
+    if chosen_action == "get_weather" and not (extract_location(user_input) or extract_location(en_text)):
+        chosen_action = "general_chat"
     
     result = None
     if execute_action_flag and confidence > 0.45:
@@ -242,14 +291,17 @@ def agent_logic(user_input, return_result=False, execute_action_flag=True):
                 result = translate_from_english(result, src_lang)
     
     if return_result:
-        return {"action": chosen_action, "confidence": float(confidence), "result": result, "detected_lang": src_lang}
+        return {"action": chosen_action, "confidence": float(confidence), "result": result, "detected_lang": src_lang, "mode": "translated"}
     
     if confidence > 0.45: 
         execute_action(chosen_action, user_input, en_text)
     else:
+        chosen_action = "general_chat"
         log("Agent Logic: No clear action found. Responding with general chat.")
 
 def execute_action_and_get_result(action_name, original_text, translated_text):
+    if action_name == "general_chat":
+        return "I'm here to help with specific actions like weather, How can I assist you?"
     if action_name == "get_weather":
         location = extract_location(original_text) or extract_location(translated_text)
         if location:
