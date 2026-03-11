@@ -126,6 +126,46 @@ def extract_location(text):
     
     return None
 
+def extract_action_from_input(text):
+    text_lower = text.lower()
+    
+    stopwords = {"a", "an", "the", "in", "at", "to", "for", "of", "you", "me", "my", "i", "your", "is", "are", "was", "will", "could", "would", "should", "can", "do", "does", "want", "like"}
+    
+    action_keywords = [
+        ("get me a", "get"), ("get me", "get"), ("get a", "get"), ("get the", "get"), ("get ", "get"),
+        ("fetch ", "fetch"), ("bring me", "bring"), ("bring a", "bring"), ("bring ", "bring"),
+        ("make ", "make"), ("order ", "order"), ("buy ", "buy"),
+        ("send ", "send"), ("email ", "email"), ("mail ", "mail"),
+        ("check ", "check"), ("look up ", "lookup"), ("search ", "search"), ("find ", "find"), ("know ", "know"),
+        ("what is ", "query"), ("what's ", "query"), ("tell me ", "query"),
+        ("weather", "weather"), ("temperature", "weather"),
+        ("shutdown", "shutdown"), ("turn off ", "shutdown"), ("power off ", "shutdown"),
+        ("delete ", "delete"), ("remove ", "remove"),
+        ("create ", "create"), ("add ", "add"),
+        ("update ", "update"), ("edit ", "edit"), ("modify ", "modify"),
+    ]
+    
+    for phrase, action in action_keywords:
+        if phrase in text_lower:
+            idx = text_lower.find(phrase) + len(phrase)
+            remaining = text_lower[idx:].strip()
+            remaining_words = remaining.split()
+            target_words = []
+            for w in remaining_words:
+                if w in stopwords:
+                    continue
+                target_words.append(w)
+                if len(target_words) >= 2:
+                    break
+            target = " ".join(target_words) if target_words else None
+            return action, target
+    
+    words = re.findall(r'[a-z]+', text_lower)
+    if words:
+        filtered = [w for w in words if w not in stopwords]
+        return filtered[0] if filtered else None, filtered[1] if len(filtered) > 1 else None
+    return None, None
+
 def get_weather(location):
     try:
         geo_url = f"https://geocoding-api.open-meteo.com/v1/search?name={location}"
@@ -242,10 +282,21 @@ def agent_logic(user_input, return_result=False, execute_action_flag=True):
     
     query_emb_direct = silent_encode([user_input])
     scores_direct = query_emb_direct @ action_embeddings.T
+    
+    all_actions_direct = [(action_names[i], float(scores_direct[0][i])) for i in range(len(action_names))]
+    all_actions_direct.sort(key=lambda x: x[1], reverse=True)
+    
     best_match_idx_direct = np.argmax(scores_direct)
     confidence_direct = scores_direct[0][best_match_idx_direct]
+    chosen_action_direct = action_names[best_match_idx_direct]
+    location_direct = extract_location(user_input)
     
-    log(f"Agent analyzing (direct): '{user_input}' (detected: {src_lang}, conf: {confidence_direct:.3f})")
+    extracted_action, extracted_target = extract_action_from_input(user_input)
+    log(f"Agent analyzing (direct): '{user_input}' (detected: {src_lang})")
+    log(f"  -> Extracted action: {extracted_action}, target: {extracted_target}")
+    log(f"  -> Possible actions (ranked): {all_actions_direct}")
+    log(f"  -> Best action: {chosen_action_direct} (conf: {confidence_direct:.3f})")
+    log(f"  -> Extracted params: {json.dumps({'location': location_direct})}")
     
     if confidence_direct > 0.35:
         chosen_action = action_names[best_match_idx_direct]
@@ -273,10 +324,22 @@ def agent_logic(user_input, return_result=False, execute_action_flag=True):
     query_emb = silent_encode([en_text])
     
     scores = query_emb @ action_embeddings.T
+    
+    all_actions = [(action_names[i], float(scores[0][i])) for i in range(len(action_names))]
+    all_actions.sort(key=lambda x: x[1], reverse=True)
+    
     best_match_idx = np.argmax(scores)
     confidence = scores[0][best_match_idx]
     
     chosen_action = action_names[best_match_idx]
+    location_translated = extract_location(en_text)
+    
+    extracted_action_en, extracted_target_en = extract_action_from_input(en_text)
+    log(f"Agent fallback to translated: '{user_input}' -> '{en_text}'")
+    log(f"  -> Extracted action: {extracted_action_en}, target: {extracted_target_en}")
+    log(f"  -> Possible actions (ranked): {all_actions}")
+    log(f"  -> Best action: {chosen_action} (conf: {confidence:.3f})")
+    log(f"  -> Extracted params: {json.dumps({'location': location_translated})}")
     
     if chosen_action == "get_weather" and not (extract_location(user_input) or extract_location(en_text)):
         chosen_action = "general_chat"
